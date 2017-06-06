@@ -16,10 +16,6 @@
 package org.wso2.andes.kernel;
 
 
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ConcurrentSkipListMap;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.wso2.andes.configuration.AndesConfigurationManager;
@@ -28,14 +24,19 @@ import org.wso2.andes.kernel.subscription.StorageQueue;
 import org.wso2.andes.server.queue.DLCQueueUtils;
 import org.wso2.andes.tools.utils.MessageTracer;
 
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ConcurrentSkipListMap;
+
 /**
  * This class is for message handling operations of a queue. Handling
  * Message caching, buffering, keep trace of messages etc
  */
-public class MessageHandler {
+public class NonPersistentMessageHandler {
 
 
-    private static Log log = LogFactory.getLog(MessageHandler.class);
+    private static Log log = LogFactory.getLog(NonPersistentMessageHandler.class);
 
     /**
      * Reference to MessageStore. This is the persistent storage for messages
@@ -62,7 +63,7 @@ public class MessageHandler {
      * In-memory message list scheduled to be delivered. These messages will be flushed
      * to subscriber.Used Map instead of Set because of https://wso2.org/jira/browse/MB-1624
      */
-    private ConcurrentMap<Long, DeliverableAndesMetadata> readButUndeliveredMessages;
+    private ConcurrentMap<Long, AndesMessage> readButUndeliveredMessages;
 
     /***
      * In case of a purge, we must store the timestamp when the purge was called.
@@ -79,7 +80,7 @@ public class MessageHandler {
 
     private final long messageFetchSize;
 
-    public MessageHandler(String queueName) {
+    public NonPersistentMessageHandler(String queueName) {
         this.storageQueueName = queueName;
         this.readButUndeliveredMessages = new ConcurrentSkipListMap<>();
         this.maxNumberOfReadButUndeliveredMessages = AndesConfigurationManager.
@@ -119,97 +120,12 @@ public class MessageHandler {
     }
 
     /**
-     * Read messages from persistent store and buffer.
-     * as well.
-     *
-     * @return number of messages loaded to memory
-     */
-    public int bufferMessages() throws AndesException {
-
-        List<DeliverableAndesMetadata> messagesReadFromStore = readMessagesFromMessageStore();
-
-        for (DeliverableAndesMetadata message : messagesReadFromStore) {
-            bufferMessage(message);
-        }
-
-        return messagesReadFromStore.size();
-    }
-
-    /**
-     * Read messages from persistent store
-     *
-     * @return list of messages
-     * @throws AndesException
-     */
-    private List<DeliverableAndesMetadata> readMessagesFromMessageStore() throws AndesException {
-        List<DeliverableAndesMetadata> messagesRead;
-        int numberOfRetries = 0;
-        long startMessageId = lastBufferedMessageId + 1;
-        try {
-
-            //Read messages in the slot
-            messagesRead = messageStore.getMetadataList(storageQueueName, startMessageId, messageFetchSize);
-
-            if (log.isDebugEnabled()) {
-                StringBuilder messageIDString = new StringBuilder();
-                for (DeliverableAndesMetadata metadata : messagesRead) {
-                    messageIDString.append(metadata.getMessageID()).append(" , ");
-                }
-                log.debug("Messages Read: " + messageIDString);
-            }
-
-        } catch (AndesException aex) {
-
-            numberOfRetries = numberOfRetries + 1;
-
-            if (numberOfRetries <= MAX_META_DATA_RETRIEVAL_COUNT) {
-
-                String errorMsg = String.format("error occurred retrieving metadata" +
-                        " list. retry count = %d", numberOfRetries);
-
-                log.error(errorMsg, aex);
-                messagesRead = messageStore.getMetadataList(storageQueueName, startMessageId, messageFetchSize);
-            } else {
-                String errorMsg = String.format("error occurred retrieving metadata list, in final attempt = %d. "
-                        + "this slot will not be delivered " + "and become stale in message store", numberOfRetries);
-
-                throw new AndesException(errorMsg, aex);
-            }
-
-        }
-
-        if (!messagesRead.isEmpty()) {
-            DeliverableAndesMetadata metadata = messagesRead.get(messagesRead.size()-1);
-            lastBufferedMessageId = metadata.messageID;
-        }
-
-        if (log.isDebugEnabled()) {
-            log.debug("Number of messages read from slot " + startMessageId
-                    + " - " + lastBufferedMessageId + " is " + messagesRead.size()
-                    + " storage queue= " + storageQueueName);
-        }
-
-        return messagesRead;
-    }
-
-    /**
      * Get buffered messages
      *
      * @return Collection with DeliverableAndesMetadata
      */
-    public Map<Long, DeliverableAndesMetadata> getReadButUndeliveredMessages() {
+    public Map<Long, AndesMessage> getReadButUndeliveredMessages() {
         return readButUndeliveredMessages;
-    }
-
-    /**
-     * Buffer messages to be delivered
-     *
-     * @param message message metadata to buffer
-     */
-    public void bufferMessage(DeliverableAndesMetadata message) {
-        readButUndeliveredMessages.putIfAbsent(message.getMessageID(), message);
-        message.markAsBuffered();
-        MessageTracer.trace(message, MessageTracer.METADATA_BUFFERED_FOR_DELIVERY);
     }
 
     /**
@@ -301,6 +217,7 @@ public class MessageHandler {
         }
         return messageCount;
     }
+
     /**
      * set the lastBufferedMessageId. This enable having a separate circular buffer.
      *
@@ -308,5 +225,13 @@ public class MessageHandler {
      */
     public void setLastBufferedMessageId(long lastBufferedMessageId) {
         this.lastBufferedMessageId = lastBufferedMessageId;
+    }
+
+    public void putMessage(AndesMessage message) {
+        readButUndeliveredMessages.putIfAbsent(message.getMetadata().getMessageID(), message);
+    }
+
+    public void removeMessage(long messageId) {
+        readButUndeliveredMessages.remove(messageId);
     }
 }

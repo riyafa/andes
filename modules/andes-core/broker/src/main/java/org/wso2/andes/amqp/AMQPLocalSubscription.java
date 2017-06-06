@@ -25,6 +25,7 @@ import org.wso2.andes.kernel.Andes;
 import org.wso2.andes.kernel.AndesAckData;
 import org.wso2.andes.kernel.AndesContent;
 import org.wso2.andes.kernel.AndesException;
+import org.wso2.andes.kernel.AndesMessage;
 import org.wso2.andes.kernel.AndesMessageMetadata;
 import org.wso2.andes.kernel.ProtocolDeliveryFailureException;
 import org.wso2.andes.kernel.ProtocolDeliveryRulesFailureException;
@@ -203,6 +204,33 @@ public class AMQPLocalSubscription implements OutboundSubscription {
             throw new ProtocolDeliveryRulesFailureException("AMQP delivery rule evaluation failed");
         }
 
+        return true;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean sendNonPersistentMessageToSubscriber(AndesMessage andesMessage) throws AndesException {
+        AndesMessageMetadata messageMetadata = andesMessage.getMetadata();
+
+        StoredMessage<MessageMetaData> cachedStoredMessage = storedMessageCache.get(messageMetadata.getMessageID());
+
+        AMQMessage message;
+        AndesContent content = AMQPUtils.getRetainedContentParts(andesMessage);
+        if (null != cachedStoredMessage) {
+            message = AMQPUtils.getQueueEntryFromStoredMessage(cachedStoredMessage, content);
+            storedMessageCache.remove(messageMetadata.getMessageID());
+        } else {
+            message = AMQPUtils.getAMQMessageForDelivery(messageMetadata, content);
+        }
+
+        QueueEntry messageToSend = AMQPUtils.convertAMQMessageToQueueEntry(message, amqQueue);
+        if (evaluateDeliveryRules(messageToSend)) {
+            sendMessage(messageToSend);
+        } else {
+            throw new ProtocolDeliveryRulesFailureException("AMQP delivery rule evaluation failed");
+        }
         return true;
     }
 

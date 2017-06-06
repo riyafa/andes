@@ -15,12 +15,11 @@
 
 package org.wso2.andes.kernel.subscription;
 
+import java.security.InvalidParameterException;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.SortedMap;
 
 import org.apache.commons.lang.builder.HashCodeBuilder;
 import org.apache.commons.logging.Log;
@@ -30,8 +29,10 @@ import org.wso2.andes.configuration.AndesConfigurationManager;
 import org.wso2.andes.configuration.enums.AndesConfiguration;
 import org.wso2.andes.kernel.AndesContext;
 import org.wso2.andes.kernel.AndesException;
+import org.wso2.andes.kernel.AndesMessage;
 import org.wso2.andes.kernel.DeliverableAndesMetadata;
-import org.wso2.andes.kernel.MessageHandler;
+import org.wso2.andes.kernel.NonPersistentMessageHandler;
+import org.wso2.andes.kernel.PersistentMessageHandler;
 import org.wso2.andes.kernel.SubscriptionAlreadyExistsException;
 import org.wso2.andes.kernel.router.AndesMessageRouter;
 
@@ -85,7 +86,12 @@ public class StorageQueue {
     /**
      * Handler for messages which handles buffering, persisting and reading messages for queue
      */
-    private MessageHandler messageHandler;
+    private PersistentMessageHandler persistentMessageHandler;
+
+    /**
+     * Handler for non-persistent messages. Does writing to and reading from a queu
+     */
+    private NonPersistentMessageHandler nonPersistentMessageHandler;
 
     /**
      * Create a storage queue instance. This instance MUST be registered at StorageQueueRegistry.
@@ -106,7 +112,8 @@ public class StorageQueue {
         this.isExclusive = isExclusive;
         this.lastPurgedTimestamp = 0L;
         this.boundedSubscriptions = new ArrayList<>(1);
-        this.messageHandler = new MessageHandler(name);
+        this.persistentMessageHandler = new PersistentMessageHandler(name);
+        this.nonPersistentMessageHandler = new NonPersistentMessageHandler(name);
     }
 
     /**
@@ -305,7 +312,8 @@ public class StorageQueue {
             }
         }
         boundedSubscriptions.add(subscription);
-        messageHandler.startMessageDelivery(this);
+        persistentMessageHandler.startMessageDelivery(this);
+        nonPersistentMessageHandler.startMessageDelivery(this);
     }
 
     /**
@@ -322,10 +330,11 @@ public class StorageQueue {
         boundedSubscriptions.remove(subscription);
         if (boundedSubscriptions.isEmpty()) {
             if (isDurable) {
-                messageHandler.clearReadButUndeliveredMessages();
+                persistentMessageHandler.clearReadButUndeliveredMessages();
+                nonPersistentMessageHandler.clearReadButUndeliveredMessages();
             }
-
-            messageHandler.stopMessageDelivery(this);
+            nonPersistentMessageHandler.stopMessageDelivery(this);
+            persistentMessageHandler.stopMessageDelivery(this);
         } else {
             subscription.rebufferUnackedMessages();
         }
@@ -366,12 +375,22 @@ public class StorageQueue {
      */
     public int bufferMessagesForDelivery() throws AndesException {
         if (!isBufferFull()) {
-            return messageHandler.bufferMessages();
+            return persistentMessageHandler.bufferMessages();
         } else {
             if (log.isDebugEnabled()) {
                 log.debug("The queue " + name + " has no room to buffer messages. ");
             }
             return 0;
+        }
+    }
+
+    public void putNonPersistentMessage(AndesMessage message) {
+        if (message.getMetadata().isPersistent()) {
+            if (!nonPersistentMessageHandler.isBufferFull()) {
+                nonPersistentMessageHandler.putMessage(message);
+            }
+        } else {
+            throw new InvalidParameterException("The message parameter has to be non persistent");
         }
     }
 
@@ -382,16 +401,19 @@ public class StorageQueue {
      * @param message message to be buffered for delivery
      */
     public void bufferMessageForDelivery(DeliverableAndesMetadata message) {
-        messageHandler.bufferMessage(message);
+        persistentMessageHandler.bufferMessage(message);
     }
-
     /**
      * Removes a message that is buffered to be scheduled given the message id.
      *
      * @param messageId id of the message to be removed from the buffer
      */
     void removeMessageFromBuffer(long messageId) {
-        messageHandler.removeBufferedMessage(messageId);
+        persistentMessageHandler.removeBufferedMessage(messageId);
+    }
+
+    void removeNonPersistentMessage(long messageId) {
+        nonPersistentMessageHandler.removeMessage(messageId);
     }
 
     /**
@@ -401,7 +423,11 @@ public class StorageQueue {
      * @return Map of messages
      */
     public Map<Long, DeliverableAndesMetadata> getMessagesForDelivery() {
-        return messageHandler.getReadButUndeliveredMessages();
+        return persistentMessageHandler.getReadButUndeliveredMessages();
+    }
+
+    public Map<Long, AndesMessage> getNonPersistentMessagesForDelivery() {
+        return nonPersistentMessageHandler.getReadButUndeliveredMessages();
     }
 
     /**
@@ -412,7 +438,7 @@ public class StorageQueue {
      * @return true if buffer is full
      */
     public boolean isBufferFull() {
-        return messageHandler.isBufferFull();
+        return persistentMessageHandler.isBufferFull();
     }
 
 
@@ -423,7 +449,11 @@ public class StorageQueue {
      * @return number of messages removed from memory
      */
     public int clearMessagesReadToBufferForDelivery() {
-        return messageHandler.clearReadButUndeliveredMessages();
+        return persistentMessageHandler.clearReadButUndeliveredMessages();
+    }
+
+    public int clearNonPersistentMessagesReadToBufferForDelivery() {
+        return nonPersistentMessageHandler.clearReadButUndeliveredMessages();
     }
 
     /**
@@ -434,7 +464,13 @@ public class StorageQueue {
     public int purgeMessages() throws AndesException {
         lastPurgedTimestamp = System.currentTimeMillis();
         log.info("Purging messages of queue " + name);
-        return messageHandler.purgeMessagesOfQueue();
+        return persistentMessageHandler.purgeMessagesOfQueue();
+    }
+
+    public int purgeNonPersistentMessages() throws AndesException {
+        lastPurgedTimestamp = System.currentTimeMillis();
+        log.info("Purging messages of queue " + name);
+        return nonPersistentMessageHandler.purgeMessagesOfQueue();
     }
 
     /**
@@ -445,7 +481,13 @@ public class StorageQueue {
     public int purgeMessagesInMemory() {
         lastPurgedTimestamp = System.currentTimeMillis();
         log.info("Purging in memory messages of queue " + name);
-        return messageHandler.purgeInMemoryMessagesOfQueue();
+        return persistentMessageHandler.purgeInMemoryMessagesOfQueue();
+    }
+
+    public int purgeNonPersistentMessagesInMemory() {
+        lastPurgedTimestamp = System.currentTimeMillis();
+        log.info("Purging in memory messages of queue " + name);
+        return nonPersistentMessageHandler.purgeInMemoryMessagesOfQueue();
     }
 
     /**
@@ -455,11 +497,15 @@ public class StorageQueue {
      * @throws AndesException
      */
     public long getMessageCount() throws AndesException {
-        return messageHandler.getMessageCountForQueue();
+        return persistentMessageHandler.getMessageCountForQueue();
     }
 
-    public MessageHandler getMessageHandler() {
-        return messageHandler;
+    public long getNonPersistentMessageCount() throws AndesException {
+        return nonPersistentMessageHandler.getMessageCountForQueue();
+    }
+
+    public PersistentMessageHandler getPersistentMessageHandler() {
+        return persistentMessageHandler;
     }
 
     public boolean equals(Object o) {

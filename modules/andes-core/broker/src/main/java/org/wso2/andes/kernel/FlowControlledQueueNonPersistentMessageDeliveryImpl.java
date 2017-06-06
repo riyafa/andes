@@ -34,11 +34,11 @@ import java.util.SortedMap;
 /**
  * Strategy definition for queue message delivery.
  */
-public class FlowControlledQueueMessageDeliveryImpl implements MessageDeliveryStrategy {
+public class FlowControlledQueueNonPersistentMessageDeliveryImpl implements MessageDeliveryStrategy {
 
-    private static Log log = LogFactory.getLog(FlowControlledQueueMessageDeliveryImpl.class);
+    private static Log log = LogFactory.getLog(FlowControlledQueueNonPersistentMessageDeliveryImpl.class);
 
-    public FlowControlledQueueMessageDeliveryImpl() {
+    public FlowControlledQueueNonPersistentMessageDeliveryImpl() {
     }
 
     /**
@@ -47,8 +47,8 @@ public class FlowControlledQueueMessageDeliveryImpl implements MessageDeliverySt
     @Override
     public int deliverMessageToSubscriptions(StorageQueue storageQueue) throws AndesException {
 
-        SortedMap<Long, DeliverableAndesMetadata> messages =
-                (SortedMap<Long, DeliverableAndesMetadata>) storageQueue.getMessagesForDelivery();
+        SortedMap<Long, AndesMessage> messages =
+                (SortedMap<Long, AndesMessage>) storageQueue.getNonPersistentMessagesForDelivery();
         int sentMessageCount = 0;
         /*
          * get all relevant type of subscriptions.
@@ -80,19 +80,20 @@ public class FlowControlledQueueMessageDeliveryImpl implements MessageDeliverySt
                 if (localSubscription.getSubscriberConnection().isSuspended()) {
                     continue;
                 }
-                Iterator<Map.Entry<Long, DeliverableAndesMetadata>> iterator = messages.tailMap(currentCursor)
+                Iterator<Map.Entry<Long, AndesMessage>> iterator = messages.tailMap(currentCursor)
                         .entrySet().iterator();
                 while (iterator.hasNext()) {
-                    Map.Entry<Long, DeliverableAndesMetadata> entry = iterator.next();
-                    DeliverableAndesMetadata message = entry.getValue();
+                    Map.Entry<Long, AndesMessage> entry = iterator.next();
+                    AndesMessage message = entry.getValue();
+                    AndesMessageMetadata messageMetadata = message.getMetadata();
                     currentCursor = entry.getKey();
                     if (localSubscription.getSubscriberConnection().hasRoomToAcceptMessages()) {
                         if (!localSubscription.getSubscriberConnection().
-                                isMessageAcceptedByConnectionSelector(message)) {
+                                isMessageAcceptedByConnectionSelector(messageMetadata)) {
                             continue; // continue on to match selectors of other subscribers
                         }
                         if (log.isDebugEnabled()) {
-                            log.debug("Scheduled to send message id = " + message.getMessageID() +
+                            log.debug("Scheduled to send message id = " + messageMetadata.getMessageID() +
                                               " to subscription id= " + localSubscription.getSubscriptionId());
                         }
 
@@ -101,13 +102,13 @@ public class FlowControlledQueueMessageDeliveryImpl implements MessageDeliverySt
                         if (storageQueue.getMessageRouter().
                                 getName().equals(AMQPUtils.TOPIC_EXCHANGE_NAME) && storageQueue.isDurable()) {
 
-                            message.setDestination(storageQueue.getName());
+                            messageMetadata.setDestination(storageQueue.getName());
                         }
 
-                        message.markAsScheduledToDeliver(localSubscription);
                         //if the message was delivered, it needs to be removed
                         iterator.remove();
-                        MessageFlusher.getInstance().deliverMessageAsynchronously(localSubscription, message);
+
+                        localSubscription.getSubscriberConnection().writeNonPersistentMessageToConnection(message);
                         numOfCurrentMsgDeliverySchedules++;
 
                         //for queue messages and durable topic messages (as they are now queue messages)
@@ -117,7 +118,7 @@ public class FlowControlledQueueMessageDeliveryImpl implements MessageDeliverySt
                         if (numOfCurrentMsgDeliverySchedules == 1) {
                             if (log.isDebugEnabled()) {
                                 log.debug(
-                                        "Removing Scheduled to send message from buffer. MsgId= " + message.getMessageID());
+                                        "Removing Scheduled to send message from buffer. MsgId= " + messageMetadata.getMessageID());
                             }
                             sentMessageCount++;
                         }

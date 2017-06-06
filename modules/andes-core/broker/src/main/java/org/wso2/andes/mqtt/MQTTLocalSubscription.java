@@ -240,6 +240,11 @@ public class MQTTLocalSubscription implements OutboundSubscription {
         return wildcardDestination;
     }
 
+    @Override
+    public boolean sendNonPersistentMessageToSubscriber(ProtocolMessage messageMetadata, AndesContent content) {
+        return false;
+    }
+
     //TODO: decide how to call this
     public void ackReceived(long messageID) {
         // Remove if received acknowledgment message id contains in retained message list.

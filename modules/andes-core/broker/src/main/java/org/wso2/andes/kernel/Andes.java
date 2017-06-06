@@ -57,6 +57,7 @@ import org.wso2.andes.kernel.dtx.DtxRegistry;
 import org.wso2.andes.kernel.router.AndesMessageRouter;
 import org.wso2.andes.kernel.subscription.AndesSubscriptionManager;
 import org.wso2.andes.kernel.subscription.StorageQueue;
+import org.wso2.andes.server.queue.QueueRegistry;
 import org.wso2.andes.tools.utils.MessageTracer;
 
 import static org.wso2.andes.configuration.enums.AndesConfiguration.PERFORMANCE_TUNING_PURGED_COUNT_TIMEOUT;
@@ -198,8 +199,13 @@ public class Andes {
 
         //Tracing message
         MessageTracer.trace(message, MessageTracer.REACHED_ANDES_CORE);
-
-        inboundEventManager.messageReceived(message, andesChannel, pubAckHandler);
+        AndesMessageMetadata messageMetadata = message.getMetadata();
+        if (messageMetadata.isPersistent()) {
+            inboundEventManager.messageReceived(message, andesChannel, pubAckHandler);
+        } else {
+            AndesContext.getInstance().getStorageQueueRegistry().getStorageQueue(messageMetadata.getStorageQueueName())
+                    .putNonPersistentMessage(message);
+        }
 
         //Adding metrics meter for message rate
 //        Meter messageMeter = MetricManager.meter(MetricsConstants.MSG_RECEIVE_RATE

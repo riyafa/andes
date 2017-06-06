@@ -17,6 +17,7 @@ package org.wso2.andes.kernel.subscription;
 
 import org.wso2.andes.kernel.AndesContent;
 import org.wso2.andes.kernel.AndesException;
+import org.wso2.andes.kernel.AndesMessage;
 import org.wso2.andes.kernel.AndesMessageMetadata;
 import org.wso2.andes.kernel.ProtocolMessage;
 
@@ -84,4 +85,7 @@ public interface OutboundSubscription {
      * @return name of the queue set by protocol
      */
     String getProtocolQueueName();
+
+    public boolean sendNonPersistentMessageToSubscriber(AndesMessage message) throws AndesException;
+
 }

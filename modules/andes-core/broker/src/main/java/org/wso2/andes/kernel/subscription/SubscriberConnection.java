@@ -22,6 +22,7 @@ import org.wso2.andes.configuration.AndesConfigurationManager;
 import org.wso2.andes.configuration.enums.AndesConfiguration;
 import org.wso2.andes.kernel.AndesContent;
 import org.wso2.andes.kernel.AndesException;
+import org.wso2.andes.kernel.AndesMessage;
 import org.wso2.andes.kernel.AndesMessageMetadata;
 import org.wso2.andes.kernel.DeliverableAndesMetadata;
 import org.wso2.andes.kernel.ProtocolMessage;
@@ -240,7 +241,20 @@ public class SubscriberConnection {
             outboundSubscription.sendMessageToSubscriber(messageMetadata, content);
         }
     }
+    public synchronized void writeNonPersistentMessageToConnection(AndesMessage message)
+            throws AndesException {
 
+        //messages are dropped if the connection is marked as obsolete.
+        if (!obsolete.get()) {
+            //It is needed to add the message reference to the tracker and increase un-ack message count BEFORE
+            // actual message send because if it is not done ack can come BEFORE executing those lines in parallel world
+            if (log.isDebugEnabled()) {
+                log.debug("Adding message to sending tracker channel id = " + protocolChannelID
+                                  + " message id = " + message.getMetadata().getMessageID());
+            }
+            outboundSubscription.sendNonPersistentMessageToSubscriber(message);
+        }
+    }
     /**
      * Marks the connection as obsolete. This will stop messages being delivered to the subscription.
      */

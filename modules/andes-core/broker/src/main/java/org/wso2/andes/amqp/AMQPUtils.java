@@ -20,13 +20,16 @@ package org.wso2.andes.amqp;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.wso2.andes.framing.AMQShortString;
+import org.wso2.andes.framing.abstraction.ContentChunk;
 import org.wso2.andes.kernel.AndesContent;
 import org.wso2.andes.kernel.AndesException;
+import org.wso2.andes.kernel.AndesMessage;
 import org.wso2.andes.kernel.AndesMessageMetadata;
 import org.wso2.andes.kernel.AndesMessagePart;
 import org.wso2.andes.kernel.AndesUtils;
 import org.wso2.andes.kernel.MessagingEngine;
 import org.wso2.andes.kernel.ProtocolMessage;
+import org.wso2.andes.kernel.RetainedContent;
 import org.wso2.andes.kernel.disruptor.inbound.InboundBindingEvent;
 import org.wso2.andes.kernel.disruptor.inbound.InboundExchangeEvent;
 import org.wso2.andes.kernel.disruptor.inbound.InboundQueueEvent;
@@ -43,8 +46,13 @@ import org.wso2.andes.server.store.MessageMetaDataType;
 import org.wso2.andes.server.store.StorableMessageMetaData;
 import org.wso2.andes.server.store.StoredMessage;
 import org.wso2.andes.store.StoredAMQPMessage;
+import org.wso2.andes.store.rdbms.RDBMSConstants;
 
 import java.nio.ByteBuffer;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -133,6 +141,15 @@ public class AMQPUtils {
         return amqMessage;
     }
 
+    public static AMQMessage getAMQMessageForDelivery(AndesMessageMetadata metadata, AndesContent content) {
+        long messageId = metadata.getMessageID();
+        //create message with meta data. This has access to message content
+        StorableMessageMetaData metaData = convertAndesMetadataToAMQMetadata(metadata);
+        QpidStoredMessage<MessageMetaData> message = new QpidStoredMessage<>(
+                new StoredAMQPMessage(messageId, metaData), content);
+        AMQMessage amqMessage = new AMQMessage(message);
+        return amqMessage;
+    }
     /**
      * convert a AMQMessage to a queue entry
      *
@@ -425,5 +442,16 @@ public class AMQPUtils {
         }
 
         return isWildCard;
+    }
+
+    public static AndesContent getRetainedContentParts(AndesMessage message) {
+
+        Map<Integer, AndesMessagePart> contentParts = new HashMap<>();
+        List<AndesMessagePart> messagePartList = message.getContentChunkList();
+
+        for (AndesMessagePart messagePart : messagePartList) {
+            contentParts.put(messagePart.getOffset(), messagePart);
+        }
+        return new RetainedContent(contentParts, contentParts.size(), message.getMetadata().getMessageID());
     }
 }
